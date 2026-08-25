@@ -57,54 +57,68 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showProfileDialog({Profile? profile}) async {
     final nameCtrl = TextEditingController(text: profile?.name ?? '');
+    bool isSubmitting = false;
+
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(profile == null ? 'Add Profile' : 'Edit Profile',
-            style: const TextStyle(fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: nameCtrl,
-          decoration: InputDecoration(
-            labelText: 'Profile Name',
-            hintText: 'e.g. Personal, Business, Home',
-            prefixIcon: const Icon(Icons.person_outline),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-          ),
-          textCapitalization: TextCapitalization.words,
-          autofocus: true,
-        ),
-        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      builder: (dialogCtx) => StatefulBuilder(builder: (ctx, setStateDialog) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(profile == null ? 'Add Profile' : 'Edit Profile',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: nameCtrl,
+            decoration: InputDecoration(
+              labelText: 'Profile Name',
+              hintText: 'e.g. Personal, Business, Home',
+              prefixIcon: const Icon(Icons.person_outline),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
             ),
-            onPressed: () async {
-              final name = nameCtrl.text.trim();
-              if (name.isEmpty) return;
-              final box = profilesBox ?? Hive.box<Profile>('profiles');
-              if (profile == null) {
-                final id = DateTime.now().microsecondsSinceEpoch;
-                final newProfile = Profile(id: id, name: name, balance: 0.0);
-                await box.put(id, newProfile);
-              } else {
-                profile.name = name;
-                await box.put(profile.id, profile);
-              }
-              if (mounted) {
-                Navigator.pop(ctx);
-              }
-            },
-            child: Text(profile == null ? 'Create' : 'Save'),
+            textCapitalization: TextCapitalization.words,
+            autofocus: true,
           ),
-        ],
-      ),
+          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+              },
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final name = nameCtrl.text.trim();
+                      if (name.isEmpty) return;
+                      setStateDialog(() => isSubmitting = true);
+
+                      // Dismiss dialog immediately
+                      Navigator.of(dialogCtx).pop();
+
+                      final box = profilesBox ?? Hive.box<Profile>('profiles');
+                      if (profile == null) {
+                        final id = DateTime.now().microsecondsSinceEpoch;
+                        final newProfile = Profile(id: id, name: name, balance: 0.0);
+                        await box.put(id, newProfile);
+                      } else {
+                        profile.name = name;
+                        if (profile.isInBox) {
+                          await profile.save();
+                        } else {
+                          await box.put(profile.id, profile);
+                        }
+                      }
+                    },
+              child: Text(profile == null ? 'Create' : 'Save'),
+            ),
+          ],
+        );
+      }),
     );
   }
 
@@ -144,18 +158,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirm == true) {
       final tBox = txBox ?? Hive.box<LedgerTx>('transactions');
-      final keysToDelete = <dynamic>[];
-      for (final key in tBox.keys.toList()) {
-        final tx = tBox.get(key);
-        if (tx != null && tx.profileId == profile.id) {
-          keysToDelete.add(key);
+      final txsToDelete = tBox.values.where((tx) => tx.profileId == profile.id).toList();
+      for (final tx in txsToDelete) {
+        if (tx.isInBox) {
+          await tx.delete();
+        } else {
+          await tBox.delete(tx.id);
         }
       }
-      if (keysToDelete.isNotEmpty) {
-        await tBox.deleteAll(keysToDelete);
-      }
       final pBox = profilesBox ?? Hive.box<Profile>('profiles');
-      await pBox.delete(profile.id);
+      if (profile.isInBox) {
+        await profile.delete();
+      } else {
+        await pBox.delete(profile.id);
+      }
     }
   }
 

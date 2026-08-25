@@ -4,17 +4,39 @@ import 'models/profile.dart';
 import 'models/ledger_tx.dart';
 import 'screens/home.dart';
 
-/// Recalculates all profile balances safely from their transaction history.
+/// Recalculates and normalizes all profile balances safely from their transaction history.
 Future<void> _recalculateAllBalances() async {
   try {
     if (!Hive.isBoxOpen('profiles') || !Hive.isBoxOpen('transactions')) return;
     final profilesBox = Hive.box<Profile>('profiles');
     final txBox = Hive.box<LedgerTx>('transactions');
 
-    for (final key in profilesBox.keys.toList()) {
-      final profile = profilesBox.get(key);
-      if (profile == null) continue;
+    // 1. Normalize profiles box so keys match profile.id
+    final allProfiles = profilesBox.values.toList();
+    for (final profile in allProfiles) {
+      if (profile.key != profile.id) {
+        final oldKey = profile.key;
+        await profilesBox.put(profile.id, profile);
+        if (oldKey != null && oldKey != profile.id) {
+          await profilesBox.delete(oldKey);
+        }
+      }
+    }
 
+    // 2. Normalize transactions box so keys match tx.id
+    final allTxs = txBox.values.toList();
+    for (final tx in allTxs) {
+      if (tx.key != tx.id) {
+        final oldKey = tx.key;
+        await txBox.put(tx.id, tx);
+        if (oldKey != null && oldKey != tx.id) {
+          await txBox.delete(oldKey);
+        }
+      }
+    }
+
+    // 3. Recalculate running balances for each profile
+    for (final profile in profilesBox.values.toList()) {
       final txs = txBox.values
           .where((tx) => tx.profileId == profile.id)
           .toList()
@@ -58,7 +80,7 @@ Future<void> main() async {
     await Hive.openBox<Profile>('profiles');
     await Hive.openBox<LedgerTx>('transactions');
 
-    // Fix any stale balance data from previous versions
+    // Normalize and fix any legacy database key mismatches
     await _recalculateAllBalances();
   } catch (e, stack) {
     debugPrint('App init error: $e\n$stack');

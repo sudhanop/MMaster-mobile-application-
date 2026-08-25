@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/profile.dart';
 import '../models/ledger_tx.dart';
 
@@ -32,6 +35,18 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     super.dispose();
   }
 
+  Profile? _findProfile(Box<Profile> box) {
+    if (box.containsKey(widget.profileId)) {
+      return box.get(widget.profileId);
+    }
+    for (final p in box.values) {
+      if (p.id == widget.profileId) {
+        return p;
+      }
+    }
+    return null;
+  }
+
   /// Recalculates the running balance for every transaction belonging
   /// to this profile, then updates the profile's total balance.
   Future<void> _recalculateProfileBalance() async {
@@ -55,10 +70,10 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
       }
     }
 
-    final profile = profilesBox.get(widget.profileId);
+    final profile = _findProfile(profilesBox);
     if (profile != null) {
       profile.balance = runningBalance;
-      await profilesBox.put(widget.profileId, profile);
+      await profilesBox.put(profile.id, profile);
     }
   }
 
@@ -73,10 +88,11 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     final reasonCtrl = TextEditingController(text: transaction?.reason ?? '');
     DateTime selected = transaction?.date ?? DateTime.now();
     String selectedAccount = transaction?.account ?? defaultAccount ?? 'bank';
+    bool isSubmitting = false;
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setStateDialog) {
+      builder: (dialogCtx) => StatefulBuilder(builder: (ctx, setStateDialog) {
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Row(
@@ -190,7 +206,9 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
           actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+              },
               child: const Text('Cancel'),
             ),
             ElevatedButton(
@@ -199,38 +217,56 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: () async {
-                final amt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
-                final reason = reasonCtrl.text.trim();
-                if (amt <= 0 || reason.isEmpty) return;
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
+                      if (amt <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Please enter a valid amount greater than 0'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        return;
+                      }
+                      setStateDialog(() => isSubmitting = true);
+                      final rawReason = reasonCtrl.text.trim();
+                      final reason = rawReason.isEmpty
+                          ? (isIncome ? 'Income' : 'Expense')
+                          : rawReason;
 
-                if (transaction == null) {
-                  final id = DateTime.now().microsecondsSinceEpoch;
-                  final tx = LedgerTx(
-                    id: id,
-                    profileId: widget.profileId,
-                    amount: amt,
-                    reason: reason,
-                    date: selected,
-                    isIncome: isIncome,
-                    newBalance: 0,
-                    account: selectedAccount,
-                  );
-                  await txBox.put(id, tx);
-                } else {
-                  transaction.amount = amt;
-                  transaction.reason = reason;
-                  transaction.date = selected;
-                  transaction.isIncome = isIncome;
-                  transaction.account = selectedAccount;
-                  await txBox.put(transaction.id, transaction);
-                }
+                      // Dismiss modal immediately
+                      Navigator.of(dialogCtx).pop();
 
-                await _recalculateProfileBalance();
-                if (mounted) {
-                  Navigator.pop(ctx);
-                }
-              },
+                      if (transaction == null) {
+                        final id = DateTime.now().microsecondsSinceEpoch;
+                        final tx = LedgerTx(
+                          id: id,
+                          profileId: widget.profileId,
+                          amount: amt,
+                          reason: reason,
+                          date: selected,
+                          isIncome: isIncome,
+                          newBalance: 0,
+                          account: selectedAccount,
+                        );
+                        await txBox.put(id, tx);
+                      } else {
+                        transaction.amount = amt;
+                        transaction.reason = reason;
+                        transaction.date = selected;
+                        transaction.isIncome = isIncome;
+                        transaction.account = selectedAccount;
+                        if (transaction.isInBox) {
+                          await transaction.save();
+                        } else {
+                          await txBox.put(transaction.id, transaction);
+                        }
+                      }
+
+                      await _recalculateProfileBalance();
+                    },
               child: const Text('Save'),
             ),
           ],
@@ -245,10 +281,11 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     String fromAccount = 'bank';
     String toAccount = 'purse';
     final reasonCtrl = TextEditingController(text: 'ATM Cash Withdrawal');
+    bool isSubmitting = false;
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setStateDialog) {
+      builder: (dialogCtx) => StatefulBuilder(builder: (ctx, setStateDialog) {
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: const Row(
@@ -335,7 +372,9 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
           actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+              },
               child: const Text('Cancel'),
             ),
             ElevatedButton(
@@ -344,45 +383,59 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: () async {
-                final amt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
-                final reason = reasonCtrl.text.trim();
-                if (amt <= 0 || reason.isEmpty) return;
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
+                      if (amt <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Please enter a valid transfer amount'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        return;
+                      }
+                      setStateDialog(() => isSubmitting = true);
+                      final rawReason = reasonCtrl.text.trim();
+                      final reason = rawReason.isEmpty
+                          ? (fromAccount == 'bank' ? 'ATM Cash Withdrawal' : 'Cash Deposit')
+                          : rawReason;
 
-                final now = DateTime.now();
-                // 1. Expense from source account
-                final id1 = DateTime.now().microsecondsSinceEpoch;
-                final txOut = LedgerTx(
-                  id: id1,
-                  profileId: widget.profileId,
-                  amount: amt,
-                  reason: '$reason (Out: ${fromAccount == 'bank' ? 'Bank' : 'Purse'})',
-                  date: now,
-                  isIncome: false,
-                  newBalance: 0,
-                  account: fromAccount,
-                );
-                await txBox.put(id1, txOut);
+                      // Dismiss modal immediately
+                      Navigator.of(dialogCtx).pop();
 
-                // 2. Income into destination account
-                final id2 = id1 + 1;
-                final txIn = LedgerTx(
-                  id: id2,
-                  profileId: widget.profileId,
-                  amount: amt,
-                  reason: '$reason (In: ${toAccount == 'bank' ? 'Bank' : 'Purse'})',
-                  date: now.add(const Duration(milliseconds: 10)),
-                  isIncome: true,
-                  newBalance: 0,
-                  account: toAccount,
-                );
-                await txBox.put(id2, txIn);
+                      final now = DateTime.now();
+                      // 1. Expense from source account
+                      final id1 = DateTime.now().microsecondsSinceEpoch;
+                      final txOut = LedgerTx(
+                        id: id1,
+                        profileId: widget.profileId,
+                        amount: amt,
+                        reason: '$reason (Out: ${fromAccount == 'bank' ? 'Bank' : 'Purse'})',
+                        date: now,
+                        isIncome: false,
+                        newBalance: 0,
+                        account: fromAccount,
+                      );
+                      await txBox.put(id1, txOut);
 
-                await _recalculateProfileBalance();
-                if (mounted) {
-                  Navigator.pop(ctx);
-                }
-              },
+                      // 2. Income into destination account
+                      final id2 = id1 + 1;
+                      final txIn = LedgerTx(
+                        id: id2,
+                        profileId: widget.profileId,
+                        amount: amt,
+                        reason: '$reason (In: ${toAccount == 'bank' ? 'Bank' : 'Purse'})',
+                        date: now.add(const Duration(milliseconds: 10)),
+                        isIncome: true,
+                        newBalance: 0,
+                        account: toAccount,
+                      );
+                      await txBox.put(id2, txIn);
+
+                      await _recalculateProfileBalance();
+                    },
               child: const Text('Transfer'),
             ),
           ],
@@ -414,76 +467,189 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     );
 
     if (confirm == true) {
-      await txBox.delete(tx.id);
+      if (tx.isInBox) {
+        await tx.delete();
+      } else {
+        await txBox.delete(tx.id);
+      }
       await _recalculateProfileBalance();
+    }
+  }
+
+  Future<void> _shareProfileReport(
+    Profile profile,
+    List<LedgerTx> txs,
+    double bankBal,
+    double purseBal,
+  ) async {
+    final buffer = StringBuffer();
+    final nowFormatted = DateFormat.yMMMd().add_jm().format(DateTime.now());
+
+    buffer.writeln('=====================================================');
+    buffer.writeln('              MMASTERS STATEMENT REPORT              ');
+    buffer.writeln('=====================================================');
+    buffer.writeln('Profile Name   : ${profile.name}');
+    buffer.writeln('Generated On   : $nowFormatted');
+    buffer.writeln('-----------------------------------------------------');
+    buffer.writeln('FINANCIAL SUMMARY:');
+    buffer.writeln('-----------------------------------------------------');
+    buffer.writeln('Total Net Balance : ₹${profile.balance.toStringAsFixed(2)}');
+    buffer.writeln('Bank Balance      : ₹${bankBal.toStringAsFixed(2)}');
+    buffer.writeln('Purse (Cash)      : ₹${purseBal.toStringAsFixed(2)}');
+    buffer.writeln('Total Transactions: ${txs.length}');
+    buffer.writeln('-----------------------------------------------------');
+    buffer.writeln('TRANSACTION HISTORY:');
+    buffer.writeln('-----------------------------------------------------');
+
+    final sortedTxs = List<LedgerTx>.from(txs)
+      ..sort((a, b) {
+        final dc = a.date.compareTo(b.date);
+        if (dc != 0) return dc;
+        return a.id.compareTo(b.id);
+      });
+
+    if (sortedTxs.isEmpty) {
+      buffer.writeln('No transactions recorded yet.');
+    } else {
+      for (int i = 0; i < sortedTxs.length; i++) {
+        final t = sortedTxs[i];
+        final dateStr = DateFormat.yMMMd().add_jm().format(t.date);
+        final typeStr = t.isIncome ? 'INCOME ' : 'EXPENSE';
+        final accStr = t.account == 'purse' ? 'Purse' : 'Bank ';
+        final sign = t.isIncome ? '+' : '-';
+        final amtStr = '$sign₹${t.amount.toStringAsFixed(2)}';
+        final balStr = 'Bal: ₹${t.newBalance.toStringAsFixed(2)}';
+
+        buffer.writeln('${(i + 1).toString().padLeft(3, ' ')}. [$dateStr] | $typeStr | $accStr | $amtStr | $balStr');
+        buffer.writeln('     Reason: ${t.reason}');
+        buffer.writeln('');
+      }
+    }
+
+    buffer.writeln('=====================================================');
+    buffer.writeln('Generated by MMaster Personal Ledger App');
+    buffer.writeln('=====================================================');
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final sanitizedName = profile.name
+          .replaceAll(RegExp(r'[^\w\s-]'), '')
+          .trim()
+          .replaceAll(RegExp(r'\s+'), '_');
+      final fileName = 'MMaster_${sanitizedName}_Statement.txt';
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsString(buffer.toString());
+
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'text/plain')],
+        text:
+            'Financial Statement for ${profile.name} (Total Balance: ₹${profile.balance.toStringAsFixed(2)})',
+        subject: 'MMaster Statement - ${profile.name}',
+      );
+    } catch (e) {
+      debugPrint('Error sharing file report: $e');
+      await Share.share(
+        buffer.toString(),
+        subject: 'MMaster Statement - ${profile.name}',
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder(
-      valueListenable: profilesBox.listenable(keys: [widget.profileId]),
+      valueListenable: profilesBox.listenable(),
       builder: (context, Box<Profile> pBox, _) {
-        final profile = pBox.get(widget.profileId);
+        final profile = _findProfile(pBox);
 
         if (profile == null) {
           return Scaffold(
             appBar: AppBar(title: const Text('Profile')),
-            body: const Center(child: Text('Profile not found or was deleted.')),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline_rounded, size: 60, color: Colors.orange),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Profile not found or was deleted.',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Go Back'),
+                    )
+                  ],
+                ),
+              ),
+            ),
           );
         }
 
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(profile.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-            elevation: 0,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.swap_horiz_rounded),
-                tooltip: 'Transfer Bank <-> Purse',
-                onPressed: () => _showTransferDialog(),
-              ),
-            ],
-          ),
-          body: ValueListenableBuilder(
-            valueListenable: txBox.listenable(),
-            builder: (context, Box<LedgerTx> tBox, _) {
-              final allProfileTxs = tBox.values
-                  .where((t) => t.profileId == widget.profileId)
-                  .toList();
+        return ValueListenableBuilder(
+          valueListenable: txBox.listenable(),
+          builder: (context, Box<LedgerTx> tBox, _) {
+            final allProfileTxs = tBox.values
+                .where((t) => t.profileId == widget.profileId)
+                .toList();
 
-              // Calculate purse vs bank balances
-              double bankBalance = 0;
-              double purseBalance = 0;
-              for (final t in allProfileTxs) {
-                final val = t.isIncome ? t.amount : -t.amount;
-                if (t.account == 'purse') {
-                  purseBalance += val;
-                } else {
-                  bankBalance += val;
-                }
+            // Calculate purse vs bank balances
+            double bankBalance = 0;
+            double purseBalance = 0;
+            for (final t in allProfileTxs) {
+              final val = t.isIncome ? t.amount : -t.amount;
+              if (t.account == 'purse') {
+                purseBalance += val;
+              } else {
+                bankBalance += val;
               }
+            }
 
-              // Filter transactions based on selection and search
-              List<LedgerTx> filteredTxs = allProfileTxs.where((t) {
-                if (_selectedFilter == 'bank' && t.account != 'bank') return false;
-                if (_selectedFilter == 'purse' && t.account != 'purse') return false;
-                if (_selectedFilter == 'income' && !t.isIncome) return false;
-                if (_selectedFilter == 'expense' && t.isIncome) return false;
-                if (_searchQuery.isNotEmpty &&
-                    !t.reason.toLowerCase().contains(_searchQuery.toLowerCase())) {
-                  return false;
-                }
-                return true;
-              }).toList();
+            // Filter transactions based on selection and search
+            List<LedgerTx> filteredTxs = allProfileTxs.where((t) {
+              if (_selectedFilter == 'bank' && t.account != 'bank') return false;
+              if (_selectedFilter == 'purse' && t.account != 'purse') return false;
+              if (_selectedFilter == 'income' && !t.isIncome) return false;
+              if (_selectedFilter == 'expense' && t.isIncome) return false;
+              if (_searchQuery.isNotEmpty &&
+                  !t.reason.toLowerCase().contains(_searchQuery.toLowerCase())) {
+                return false;
+              }
+              return true;
+            }).toList();
 
-              filteredTxs.sort((a, b) {
-                final dateCompare = b.date.compareTo(a.date);
-                if (dateCompare != 0) return dateCompare;
-                return b.id.compareTo(a.id);
-              });
+            filteredTxs.sort((a, b) {
+              final dateCompare = b.date.compareTo(a.date);
+              if (dateCompare != 0) return dateCompare;
+              return b.id.compareTo(a.id);
+            });
 
-              return Column(
+            return Scaffold(
+              appBar: AppBar(
+                title: Text(profile.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                elevation: 0,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.share_rounded),
+                    tooltip: 'Share Statement (.txt file)',
+                    onPressed: () => _shareProfileReport(
+                      profile,
+                      allProfileTxs,
+                      bankBalance,
+                      purseBalance,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.swap_horiz_rounded),
+                    tooltip: 'Transfer Bank <-> Purse',
+                    onPressed: () => _showTransferDialog(),
+                  ),
+                ],
+              ),
+              body: Column(
                 children: [
                   // ── Top Summary Gradient Banner ──
                   Container(
@@ -833,10 +999,8 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                           ),
                   ),
                 ],
-              );
-            },
-          ),
-          floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+              ),
+              floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
           floatingActionButton: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: Row(
@@ -867,5 +1031,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
         );
       },
     );
+  },
+);
   }
 }
