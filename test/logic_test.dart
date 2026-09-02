@@ -197,5 +197,46 @@ void main() {
 
       await txBox.close();
     });
+
+    test('reproduces user scenario: Bank (132) + Purse (6) = Total (138)', () async {
+      final txBox = await Hive.openBox<LedgerTx>('test_user_scenario_t');
+
+      // 1. Initial Deposit / Balance: +427 Bank
+      await txBox.put(1, LedgerTx(id: 1, profileId: 10, amount: 427.0, reason: 'Initial', date: DateTime(2026, 8, 25, 10, 0), isIncome: true, newBalance: 427.0, account: 'bank'));
+      // 2. Photo print: -120 Bank
+      await txBox.put(2, LedgerTx(id: 2, profileId: 10, amount: 120.0, reason: 'For photo print', date: DateTime(2026, 8, 25, 11, 51), isIncome: false, newBalance: 307.0, account: 'bank'));
+      // 3. Thanni can: -90 Bank
+      await txBox.put(3, LedgerTx(id: 3, profileId: 10, amount: 90.0, reason: 'Thanni can', date: DateTime(2026, 8, 25, 11, 52), isIncome: false, newBalance: 217.0, account: 'bank'));
+      // 4. Annexure j: -6 Bank
+      await txBox.put(4, LedgerTx(id: 4, profileId: 10, amount: 6.0, reason: 'Annexure j', date: DateTime(2026, 8, 25, 11, 52), isIncome: false, newBalance: 211.0, account: 'bank'));
+      // 5. Total taga test: -13 Bank
+      await txBox.put(5, LedgerTx(id: 5, profileId: 10, amount: 13.0, reason: 'Total taga test payments made', date: DateTime(2026, 8, 25, 11, 52), isIncome: false, newBalance: 198.0, account: 'bank'));
+      // 6. Transfer 6 to Purse (Out: Bank)
+      await txBox.put(6, LedgerTx(id: 6, profileId: 10, amount: 6.0, reason: 'My purse balance (Out: Bank)', date: DateTime(2026, 8, 25, 11, 53), isIncome: false, newBalance: 192.0, account: 'bank'));
+      // 7. Transfer 6 to Purse (In: Purse)
+      await txBox.put(7, LedgerTx(id: 7, profileId: 10, amount: 6.0, reason: 'My purse balance (In: Purse)', date: DateTime(2026, 8, 25, 11, 53), isIncome: true, newBalance: 198.0, account: 'purse'));
+      // 8. Thanni can: -60 Bank
+      await txBox.put(8, LedgerTx(id: 8, profileId: 10, amount: 60.0, reason: 'Thanni can', date: DateTime(2026, 8, 29, 14, 31), isIncome: false, newBalance: 138.0, account: 'bank'));
+
+      final txs = txBox.values.where((t) => t.profileId == 10).toList();
+
+      double bank = 0;
+      double purse = 0;
+      for (final t in txs) {
+        final val = t.isIncome ? t.amount : -t.amount;
+        if (t.account == 'purse') {
+          purse += val;
+        } else {
+          bank += val;
+        }
+      }
+      final total = bank + purse;
+
+      expect(bank, 132.0);
+      expect(purse, 6.0);
+      expect(total, 138.0);
+
+      await txBox.close();
+    });
   });
 }

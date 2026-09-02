@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/profile.dart';
 import '../models/ledger_tx.dart';
@@ -56,6 +57,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showProfileDialog({Profile? profile}) async {
+    HapticFeedback.lightImpact();
     final nameCtrl = TextEditingController(text: profile?.name ?? '');
     bool isSubmitting = false;
 
@@ -95,6 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   : () async {
                       final name = nameCtrl.text.trim();
                       if (name.isEmpty) return;
+                      HapticFeedback.mediumImpact();
                       setStateDialog(() => isSubmitting = true);
 
                       // Dismiss dialog immediately
@@ -123,6 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteProfile(Profile profile) async {
+    HapticFeedback.mediumImpact();
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -144,7 +148,10 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () {
+              HapticFeedback.heavyImpact();
+              Navigator.pop(ctx, true);
+            },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
@@ -209,12 +216,15 @@ class _HomeScreenState extends State<HomeScreen> {
               final profiles = profilesListenableBox.values.toList();
               final allTxs = txListenableBox.values.toList();
 
-              // Calculate overall metrics
+              final existingProfileIds = profiles.map((p) => p.id).toSet();
+              final validTxs = allTxs.where((tx) => existingProfileIds.contains(tx.profileId)).toList();
+
+              // Calculate overall metrics from valid transactions
               double totalOverallBalance = 0;
               double totalBankBalance = 0;
               double totalPurseBalance = 0;
 
-              for (final tx in allTxs) {
+              for (final tx in validTxs) {
                 final signedAmt = tx.isIncome ? tx.amount : -tx.amount;
                 totalOverallBalance += signedAmt;
                 if (tx.account == 'purse') {
@@ -434,7 +444,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       }
                     }
 
-                    final isPositive = profile.balance >= 0;
+                    final double profileTotalBalance = profileBank + profilePurse;
+                    final isPositive = profileTotalBalance >= 0;
 
                     return Card(
                       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -489,7 +500,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       Text(
-                                        '₹${profile.balance.toStringAsFixed(2)}',
+                                        '₹${profileTotalBalance.toStringAsFixed(2)}',
                                         style: TextStyle(
                                           fontSize: 17,
                                           fontWeight: FontWeight.w800,

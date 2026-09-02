@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -61,19 +62,28 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
 
     double runningBalance = 0;
     for (final tx in txs) {
-      runningBalance = tx.isIncome
-          ? runningBalance + tx.amount
-          : runningBalance - tx.amount;
-      if (tx.newBalance != runningBalance) {
+      final change = tx.isIncome ? tx.amount : -tx.amount;
+      runningBalance = ((runningBalance + change) * 100).round() / 100.0;
+      if ((tx.newBalance - runningBalance).abs() > 0.001) {
         tx.newBalance = runningBalance;
-        await txBox.put(tx.id, tx);
+        if (tx.isInBox) {
+          await tx.save();
+        } else {
+          await txBox.put(tx.id, tx);
+        }
       }
     }
 
     final profile = _findProfile(profilesBox);
     if (profile != null) {
-      profile.balance = runningBalance;
-      await profilesBox.put(profile.id, profile);
+      if ((profile.balance - runningBalance).abs() > 0.001) {
+        profile.balance = runningBalance;
+        if (profile.isInBox) {
+          await profile.save();
+        } else {
+          await profilesBox.put(profile.id, profile);
+        }
+      }
     }
   }
 
@@ -82,6 +92,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     required bool isIncome,
     String? defaultAccount,
   }) async {
+    HapticFeedback.lightImpact();
     final amtCtrl = TextEditingController(
       text: transaction != null ? transaction.amount.toString() : '',
     );
@@ -174,8 +185,9 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                 InkWell(
                   borderRadius: BorderRadius.circular(14),
                   onTap: () async {
+                    HapticFeedback.selectionClick();
                     final d = await showDatePicker(
-                      context: ctx,
+                      context: context,
                       initialDate: selected,
                       firstDate: DateTime(2000),
                       lastDate: DateTime(2100),
@@ -230,6 +242,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                         );
                         return;
                       }
+                      HapticFeedback.mediumImpact();
                       setStateDialog(() => isSubmitting = true);
                       final rawReason = reasonCtrl.text.trim();
                       final reason = rawReason.isEmpty
@@ -277,6 +290,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
 
   /// Quick Transfer Dialog: transfer between Bank and Purse
   Future<void> _showTransferDialog() async {
+    HapticFeedback.lightImpact();
     final amtCtrl = TextEditingController();
     String fromAccount = 'bank';
     String toAccount = 'purse';
@@ -321,6 +335,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                       IconButton(
                         icon: const Icon(Icons.swap_horizontal_circle_rounded, color: Colors.indigo, size: 28),
                         onPressed: () {
+                          HapticFeedback.selectionClick();
                           setStateDialog(() {
                             final temp = fromAccount;
                             fromAccount = toAccount;
@@ -396,6 +411,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                         );
                         return;
                       }
+                      HapticFeedback.mediumImpact();
                       setStateDialog(() => isSubmitting = true);
                       final rawReason = reasonCtrl.text.trim();
                       final reason = rawReason.isEmpty
@@ -445,6 +461,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
   }
 
   Future<void> _deleteTransaction(LedgerTx tx) async {
+    HapticFeedback.mediumImpact();
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -458,7 +475,10 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () {
+              HapticFeedback.heavyImpact();
+              Navigator.pop(ctx, true);
+            },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Delete'),
           ),
@@ -485,6 +505,8 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     final buffer = StringBuffer();
     final nowFormatted = DateFormat.yMMMd().add_jm().format(DateTime.now());
 
+    final totalBal = bankBal + purseBal;
+
     buffer.writeln('=====================================================');
     buffer.writeln('              MMASTERS STATEMENT REPORT              ');
     buffer.writeln('=====================================================');
@@ -493,7 +515,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     buffer.writeln('-----------------------------------------------------');
     buffer.writeln('FINANCIAL SUMMARY:');
     buffer.writeln('-----------------------------------------------------');
-    buffer.writeln('Total Net Balance : ₹${profile.balance.toStringAsFixed(2)}');
+    buffer.writeln('Total Net Balance : ₹${totalBal.toStringAsFixed(2)}');
     buffer.writeln('Bank Balance      : ₹${bankBal.toStringAsFixed(2)}');
     buffer.writeln('Purse (Cash)      : ₹${purseBal.toStringAsFixed(2)}');
     buffer.writeln('Total Transactions: ${txs.length}');
@@ -543,7 +565,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'text/plain')],
         text:
-            'Financial Statement for ${profile.name} (Total Balance: ₹${profile.balance.toStringAsFixed(2)})',
+            'Financial Statement for ${profile.name} (Total Balance: ₹${totalBal.toStringAsFixed(2)})',
         subject: 'MMaster Statement - ${profile.name}',
       );
     } catch (e) {
@@ -596,7 +618,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                 .where((t) => t.profileId == widget.profileId)
                 .toList();
 
-            // Calculate purse vs bank balances
+            // Calculate purse vs bank balances and live total balance
             double bankBalance = 0;
             double purseBalance = 0;
             for (final t in allProfileTxs) {
@@ -607,6 +629,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                 bankBalance += val;
               }
             }
+            final double calculatedTotalBalance = bankBalance + purseBalance;
 
             // Filter transactions based on selection and search
             List<LedgerTx> filteredTxs = allProfileTxs.where((t) {
@@ -687,11 +710,11 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                                   const SizedBox(height: 2),
                                   const Text('TOTAL BALANCE', style: TextStyle(color: Colors.white70, fontSize: 11, letterSpacing: 1)),
                                   Text(
-                                    '₹${profile.balance.toStringAsFixed(2)}',
+                                    '₹${calculatedTotalBalance.toStringAsFixed(2)}',
                                     style: TextStyle(
                                       fontSize: 26,
                                       fontWeight: FontWeight.w800,
-                                      color: profile.balance >= 0 ? const Color(0xFFB9F6CA) : const Color(0xFFFF8A80),
+                                      color: calculatedTotalBalance >= 0 ? const Color(0xFFB9F6CA) : const Color(0xFFFF8A80),
                                     ),
                                   ),
                                 ],
@@ -839,31 +862,46 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
                         ChoiceChip(
                           label: const Text('All'),
                           selected: _selectedFilter == 'all',
-                          onSelected: (val) => setState(() => _selectedFilter = 'all'),
+                          onSelected: (val) {
+                            HapticFeedback.selectionClick();
+                            setState(() => _selectedFilter = 'all');
+                          },
                         ),
                         const SizedBox(width: 6),
                         ChoiceChip(
                           label: const Text('🏦 Bank'),
                           selected: _selectedFilter == 'bank',
-                          onSelected: (val) => setState(() => _selectedFilter = val ? 'bank' : 'all'),
+                          onSelected: (val) {
+                            HapticFeedback.selectionClick();
+                            setState(() => _selectedFilter = val ? 'bank' : 'all');
+                          },
                         ),
                         const SizedBox(width: 6),
                         ChoiceChip(
                           label: const Text('👛 Purse'),
                           selected: _selectedFilter == 'purse',
-                          onSelected: (val) => setState(() => _selectedFilter = val ? 'purse' : 'all'),
+                          onSelected: (val) {
+                            HapticFeedback.selectionClick();
+                            setState(() => _selectedFilter = val ? 'purse' : 'all');
+                          },
                         ),
                         const SizedBox(width: 6),
                         ChoiceChip(
                           label: const Text('📈 Income'),
                           selected: _selectedFilter == 'income',
-                          onSelected: (val) => setState(() => _selectedFilter = val ? 'income' : 'all'),
+                          onSelected: (val) {
+                            HapticFeedback.selectionClick();
+                            setState(() => _selectedFilter = val ? 'income' : 'all');
+                          },
                         ),
                         const SizedBox(width: 6),
                         ChoiceChip(
                           label: const Text('📉 Spend'),
                           selected: _selectedFilter == 'expense',
-                          onSelected: (val) => setState(() => _selectedFilter = val ? 'expense' : 'all'),
+                          onSelected: (val) {
+                            HapticFeedback.selectionClick();
+                            setState(() => _selectedFilter = val ? 'expense' : 'all');
+                          },
                         ),
                       ],
                     ),

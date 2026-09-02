@@ -48,18 +48,25 @@ Future<void> _recalculateAllBalances() async {
 
       double runningBalance = 0;
       for (final tx in txs) {
-        runningBalance = tx.isIncome
-            ? runningBalance + tx.amount
-            : runningBalance - tx.amount;
-        if (tx.newBalance != runningBalance) {
+        final change = tx.isIncome ? tx.amount : -tx.amount;
+        runningBalance = ((runningBalance + change) * 100).round() / 100.0;
+        if ((tx.newBalance - runningBalance).abs() > 0.001) {
           tx.newBalance = runningBalance;
-          await txBox.put(tx.id, tx);
+          if (tx.isInBox) {
+            await tx.save();
+          } else {
+            await txBox.put(tx.id, tx);
+          }
         }
       }
 
-      if (profile.balance != runningBalance) {
+      if ((profile.balance - runningBalance).abs() > 0.001) {
         profile.balance = runningBalance;
-        await profilesBox.put(profile.id, profile);
+        if (profile.isInBox) {
+          await profile.save();
+        } else {
+          await profilesBox.put(profile.id, profile);
+        }
       }
     }
   } catch (e, stack) {
